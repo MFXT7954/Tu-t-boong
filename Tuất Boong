@@ -1,0 +1,158 @@
+if getgenv().__BF_LOADED == game.JobId then
+	return getgenv().__BF_RESULT
+end
+
+repeat
+	wait()
+until game:IsLoaded() and game.Players.LocalPlayer
+-- Luraph macro stubs (LPH_ATTRIBUTES(VM(NONE)) duoc goi o 4 cho, truoc do khong duoc dinh nghia)
+LPH_ATTRIBUTES = LPH_ATTRIBUTES or function(...)
+	return ...
+end
+VM = VM or function(...)
+	return ...
+end
+
+-- Nang identity thread (loi "lacking capability Plugin") + guard UI de 1 element loi khong lam dung ca script
+function ElevateIdentity()
+	pcall(function()
+		local f = setthreadidentity or setidentity or set_thread_identity or (syn and syn.set_thread_identity) or setthreadcontext
+		if f then
+			f(8)
+		end
+	end)
+end
+ElevateIdentity()
+
+-- Mo rong ban kinh Streaming: neu khong, cac Part spawn quai (EnemySpawns) va
+-- chinh con quai trong Workspace.Enemies se KHONG ton tai phia client cho toi
+-- khi nhan vat thuc su di toi gan (Roblox StreamingEnabled). Luc do DetectMob
+-- va DetectPartSpawnMob deu tra ve nil -> farm dung im cho den khi minh tu chay
+-- lai gan. Tat/no rong Streaming ngay tu dau de mob spawn xa cung duoc client
+-- nhan biet va script tu di toi duoc.
+-- FIX HOP CRASH: truoc day set StreamingMinRadius/TargetRadius = 1e8 ngay luc load -> sau hop/travel
+-- client bi ep load CA map moi trong khi map cu chua giai phong -> het RAM -> Roblox tu thoat.
+-- Gio: chi mo rong sau khi server moi on dinh (nhan vat load + 15s), muc vua phai, va tra ve
+-- gia tri goc ngay khi bat dau teleport de engine con xa duoc map cu.
+getgenv().__BF_TELEPORTING = false
+local __streamOrig = {}
+pcall(function()
+	__streamOrig.min = workspace.StreamingMinRadius
+	__streamOrig.target = workspace.StreamingTargetRadius
+end)
+task.spawn(function()
+	local lp = game.Players.LocalPlayer
+	repeat
+		task.wait(1)
+	until lp.Character and lp.Character:FindFirstChild("HumanoidRootPart")
+	task.wait(15)
+	if getgenv().__BF_TELEPORTING then
+		return
+	end
+	pcall(function()
+		workspace.StreamingMinRadius = 4000
+		workspace.StreamingTargetRadius = 6000
+	end)
+end)
+pcall(function()
+	game.Players.LocalPlayer.OnTeleport:Connect(function()
+		getgenv().__BF_TELEPORTING = true
+		pcall(function()
+			if __streamOrig.min then
+				workspace.StreamingMinRadius = __streamOrig.min
+			end
+			if __streamOrig.target then
+				workspace.StreamingTargetRadius = __streamOrig.target
+			end
+		end)
+	end)
+end)
+
+task.spawn(function()
+	local env = getgenv()
+	local need = {
+		"getconnections", "fireclickdetector", "fireproximityprompt", "firetouchinterest", "newcclosure",
+		"getrawmetatable", "getnamecallmethod", "setclipboard", "isfolder", "makefolder", "writefile",
+		"readfile", "delfile", "sethiddenproperty", "getupvalues", "getupvalue", "setupvalue",
+		"queue_on_teleport", "getnilinstances", "Drawing", "hookmetamethod", "request",
+	}
+	local miss = {}
+	for _, n in ipairs(need) do
+		if env[n] == nil then
+			table.insert(miss, n)
+		end
+	end
+	if not (env.setthreadidentity or env.setidentity or env.set_thread_identity) then
+		table.insert(miss, "setthreadidentity")
+	end
+	local ok, name = pcall(function()
+		return identifyexecutor and identifyexecutor() or "unknown"
+	end)
+	print("[BananaFix] executor:", ok and name or "unknown", "| thieu ham:", #miss > 0 and table.concat(miss, ", ") or "khong")
+end)
+local function uiStub()
+	return setmetatable({}, {
+		__index = function()
+			return function() end
+		end,
+		__call = function() end,
+	})
+end
+local function guardUI(obj, label)
+	if type(obj) ~= "table" then
+		return obj
+	end
+	return setmetatable({}, {
+		__index = function(_, k)
+			local v = obj[k]
+			if type(v) ~= "function" then
+				return v
+			end
+			return function(...)
+				local res = table.pack(pcall(v, ...))
+				if not res[1] then
+					ElevateIdentity()
+					res = table.pack(pcall(v, ...))
+				end
+				if not res[1] then
+					warn(("[BananaFix] %s.%s failed: %s"):format(label, tostring(k), tostring(res[2])))
+					return uiStub()
+				end
+				return guardUI(res[2], label .. "." .. tostring(k)), unpack(res, 3, res.n)
+			end
+		end,
+		__newindex = function(_, k, v)
+			obj[k] = v
+		end,
+	})
+end
+
+-- Quest UI check: V1 (PlayerGui.Main.Quest) + V2 (PlayerGui.TrackedQuestFrame)
+-- V3 (StarterGui.Main.Quest) khong dung: day la ban mau, khong phan anh quest dang co.
+local function readText(inst)
+	if not inst then
+		return nil
+	end
+	if inst:IsA("TextLabel") or inst:IsA("TextButton") or inst:IsA("TextBox") then
+		return inst.Text ~= "" and inst.Text or nil
+	end
+	for _, d in ipairs(inst:GetDescendants()) do
+		if d:IsA("TextLabel") and d.Text ~= "" then
+			return d.Text
+		end
+	end
+	return nil
+end
+function GetQuestTitle()
+	local lp = game:GetService("Players").LocalPlayer
+	local pg = lp and lp:FindFirstChild("PlayerGui")
+	if not pg then
+		return nil
+	end
+	-- V1
+	local main = pg:FindFirstChild("Main") or pg:FindFirstChild("Main (minimal)")
+	local q = main and main:FindFirstChild("Quest")
+	if q and q.Visible then
+		local c = q:FindFirstChild("Container")
+		local qt = c and c:FindFirstChild("QuestTitle")
+		local txt = readText(qt and qt:FindFirstChild("Title
